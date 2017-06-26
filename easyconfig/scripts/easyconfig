@@ -1,0 +1,346 @@
+#!/bin/bash
+
+REQREBOOT=0
+AUTOSTART=/home/pi/.config/lxsession/LXDE-pi/autostart
+
+#NTP Helper Functions
+do_ntp_enable(){
+	timedatectl set-ntp true
+}
+do_ntp_disable(){
+	timedatectl set-ntp false
+}
+do_ntp_set(){
+	TIMESERVER=$(whiptail --inputbox "Enter Timeserver Address" 20 60 time.ad.goodmanmfg.com 3>&1 1>&2 2>&3)
+		if [ $? -eq 0 ]; then
+			if [ -z "$TIMESERVER" ]; then
+				return 1
+			else
+				sed -i "s/.*Servers=.*/Servers=$TIMESERVER/g" /etc/systemd/timesyncd.conf
+				systemctl restart systemd-timesyncd.service
+				return 0
+			fi
+		fi
+}
+
+#Dashboard Helper Functions
+do_dash_clear(){
+	sed -i '/@chromium-browser/d' $AUTOSTART
+}
+do_dash_disable(){
+	sed -i 's/^@chromium-browser/#@chromium-browser/g' $AUTOSTART
+}
+do_dash_enable(){
+	DASHURL=$(whiptail --inputbox "Enter Dashboard Page (Must include http(s)://..." 20 60 "" 3>&1 1>&2 2>&3)
+		if [ $? -eq 0 ]; then
+			if [ -z "$DASHURL" ]; then
+				return 3
+			else
+				do_dash_disable
+				echo -n -e "\n@chromium-browser --noerrdialogs --kiosk --incognito $DASHURL" \
+				| cat - >> $AUTOSTART
+				REQREBOOT=1
+				return 0
+			fi
+		fi
+}
+
+#Chrome Helper Functions
+do_chromemem_enable(){
+	
+	runuser -l pi -c " \
+	crontab -l > mycron; \
+	sed -i 's/#\* \* \* \* \* sudo \/home\/pi\/rebootbigchromium.sh/* * * * * sudo \/home\/pi\/rebootbigchromium.sh/g' mycron; \
+	crontab mycron; \
+	rm mycron"
+	#exit
+}
+do_chromemem_disable(){
+	runuser -l pi -c " \
+	crontab -l > mycron; \
+	sed -i 's/\* \* \* \* \* sudo \/home\/pi\/rebootbigchromium.sh/#* * * * * sudo \/home\/pi\/rebootbigchromium.sh/g' mycron; \
+	crontab mycron; \
+	rm mycron"
+	#exit
+}
+
+#WiFi Helper Functions
+do_wifi_clear(){
+	cat /home/pi/easyconfig/templates/clearWireless > /etc/wpa_supplicant/wpa_supplicant.conf
+	REQREBOOT=1
+}
+do_enterprise(){
+	do_wifi_clear
+	SSID=$(whiptail --inputbox "Enter the network name" 20 60 DKGDMWP@2ent 3>&1 1>&2 2>&3)
+	if [ $? -eq 0 ]; then
+		if [ -z "$SSID" ]; then
+			return 1
+		else
+			USER=$(whiptail --inputbox "Enter Domain User Name (do not include GMC/)" 20 60 "" 3>&1 1>&2 2>&3)
+			if [ $? -eq 0 ]; then
+				if [ -z "$USER" ]; then
+					return 2
+				else
+					PASS=$(whiptail --passwordbox "Enter Domain Password" 20 60 "" 3>&1 1>&2 2>&3)
+					if [ $? -eq 0 ]; then
+						if [ -z "$PASS" ]; then
+							return 3
+						else
+							echo -n -e "network={\n\tssid=\"$SSID\"\n\tkey_mgmt=WPA-EAP\n\tidentity=\"$USER\"\n\tpassword=\"$PASS\"\n}\n" \
+							| cat - >> /etc/wpa_supplicant/wpa_supplicant.conf
+							REQREBOOT=1
+							return 0
+						fi
+					fi
+				fi
+			fi
+		fi
+	fi
+
+	
+}
+do_generic(){
+	do_wifi_clear
+	SSID=$(whiptail --inputbox "Enter the network name" 20 60 // 3>&1 1>&2 2>&3)
+	if [ $? -eq 0 ]; then
+		if [ -z "$SSID" ]; then
+			return 1
+		else
+			PASS=$(whiptail --inputbox "Enter Wireless Password" 20 60 "" 3>&1 1>&2 2>&3)
+			if [ $? -eq 0 ]; then
+				if [ -z "$PASSS" ]; then
+					return 2
+				else
+						echo -e "network={\n\tssid=\"$SSID\"\n\tpsk=\"$PASS\"\n\tkey_mgmt=WPA-PSK\n}\n" \
+						| cat - >> /etc/wpa_supplicant/wpa_supplicant.conf
+						REQREBOOT=1
+						return 0
+				fi
+			fi
+		fi
+	fi
+
+}
+
+#Ethernet Helper Functions
+do_eth_clear(){
+	cat /home/pi/easyconfig/templates/clearStatic > /etc/network/interfaces
+	REQREBOOT=1
+}
+do_DHCP(){
+	do_eth_clear
+	whiptail --title "DHCP SET" --msgbox "DHCP Settings will take effect on the next boot." 10 78
+}
+do_static(){
+	do_eth_clear
+	ADDRESS=$(whiptail --inputbox "Enter Desired Static IP" 20 60 192.168.xx.xx 3>&1 1>&2 2>&3)
+	if [ $? -eq 0 ]; then
+		if [ -z "$ADDRESS" ]; then
+			return 1
+		else
+			NETMASK=$(whiptail --inputbox "Enter Netmask" 20 60 255.255.255.0 3>&1 1>&2 2>&3)
+			if [ $? -eq 0 ]; then
+				if [ -z "$NETMASK" ]; then
+					return 2
+				else
+					NETWORK=$(whiptail --inputbox "Enter Network Address" 20 60 192.168.xx.0 3>&1 1>&2 2>&3)
+					if [ $? -eq 0 ]; then
+						if [ -z "$NETWORK" ]; then
+							return 3
+						else
+							BROADCAST=$(whiptail --inputbox "Enter Broadcast Address" 20 60 192.168.xx.255 3>&1 1>&2 2>&3)
+							if [ $? -eq 0 ]; then
+								if [ -z "$BROADCAST" ]; then
+									return 4
+								else
+									GATEWAY=$(whiptail --inputbox "Enter Gateway Address" 20 60 192.168.xx.1 3>&1 1>&2 2>&3)
+									if [ $? -eq 0 ]; then
+										if [ -z "$GATEWAY" ]; then
+											return 5
+										else
+											sed -i 's/^iface eth0/#iface eth0/g' /etc/network/interfaces
+											echo -n -e "\niface eth0 inet static\naddress $ADDRESS\nnetmask $NETMASK\nnetwork $NETWORK\nbroadcast $BROADCAST\ngateway $GATEWAY\n" \
+											| cat - >> /etc/network/interfaces
+											REQREBOOT=1
+											return 0
+										fi
+									fi
+								fi
+							fi
+						fi
+					fi
+				fi
+			fi
+		fi
+	fi
+}
+
+#Finish Function
+do_finish(){
+	if [ $REQREBOOT -eq 1 ]; then
+		if (whiptail --title "REBOOT REQUIRED" --yesno "You have made changes to system configuration files and a reboot is required. Would you like to do this now?" 10 78) then
+			reboot
+		else
+			exit 0	
+		fi
+	else
+		exit 0
+	fi
+
+}
+
+#Networking Helper Functions
+do_wifi() {
+	whiptail --title "NOTE" --msgbox "When connecting to a network you will need to know the name of the network. This program will not scan for available networks. As a result, you will not be able to test success until AFTER rebooting." 10 78
+	WIFIMENU=$(whiptail --title "Network Configuration for DashboardPi" --menu "What are you configuring?" 12 78 3 --cancel-button Back --ok-button Select \
+		"Connect To Enterprise WiFi" "  Connect To Domain-Restricted Network" \
+		"Connect To Generic WiFi" "  Connect To Other WiFi" \
+		"Clear Wifi Settings" "  Forget Wireless Networks" \
+		3>&1 1>&2 2>&3)
+	
+	RET=$?
+	if [ $RET -ne 0 ]; then
+		return 0
+	elif [ $RET -eq 0 ]; then
+		case "$WIFIMENU" in
+			*Enterprise*) do_enterprise ;;
+			*Generic*) do_generic ;;
+			*Clear*) do_wifi_clear ;;
+		esac
+	fi
+}
+do_ethernet() {
+	WIFIMENU=$(whiptail --title "Ethernet Configuration for DashboardPi" --menu "What are you configuring?" 12 78 3 --cancel-button Back --ok-button Select \
+		"DHCP" "  Allow the network to assign an IP" \
+		"Static" "  Assign a specific IP" \
+		3>&1 1>&2 2>&3)
+	
+	RET=$?
+	if [ $RET -ne 0 ]; then
+		return 0
+	elif [ $RET -eq 0 ]; then
+		case "$WIFIMENU" in
+			DHCP) do_DHCP ;;
+			Static) do_static ;;
+		esac
+	fi
+}
+
+#About Function
+do_about() {
+	#About TextBox
+	#height=10, width=78
+	whiptail --title "About" --msgbox "This script was developed by Chance Murray for the AMS Support Team at Goodman Mfg. Feel free to contact him with any questions at: chance.s.murray@gmail.com" 10 78
+}
+
+#Chrome Memory Reboot Functions
+do_chrome(){
+	whiptail --title "WARNING" --msgbox "These options will take effect immediately after being run, without needing a reboot! This means that if chromium is not open, and the script is enabled, the system will reboot when the minutes change. It is recommended you wait to enable this until all other settings are configured." 11 78
+
+	CHROMEMENU=$(whiptail --title "Chrome Memory Reboot Configuration for DashboardPi" --menu "What would you like to do?" 10 78 2 --cancel-button Back --ok-button Select \
+		"Enable" "  Enable Chrome Memory Script" \
+		"Disable" "  Disable Chrome Memory Script" \
+		3>&1 1>&2 2>&3)
+	
+	RET=$?
+	if [ $RET -ne 0 ]; then
+		return 0
+	elif [ $RET -eq 0 ]; then
+		case "$CHROMEMENU" in
+	Enable) do_chromemem_enable ;;
+	Disable) do_chromemem_disable ;;
+		esac
+	fi
+}
+
+#NTP Function
+do_ntp(){
+	NTPENU=$(whiptail --title "TimeServer Configuration for DashboardPi" --menu "What would you like to do?" 12 78 3 --cancel-button Back --ok-button Select \
+		"Enable" "  Enable TimeServer" \
+		"Disable" "  Disable TimeServer" \
+		"Set" "  Set Location of TimeServer and Restart the Service" \
+		3>&1 1>&2 2>&3)
+	
+	RET=$?
+	if [ $RET -ne 0 ]; then
+		return 0
+	elif [ $RET -eq 0 ]; then
+		case "$NTPENU" in
+			Enable) do_ntp_enable ;;
+			Disable) do_ntp_disable ;;
+			Set) do_ntp_set ;;
+		esac
+	fi
+}
+
+#Dashboard Function
+do_dashboard(){
+	DASHMENU=$(whiptail --title "Dashboard Configuration for DashboardPi" --menu "What would you like to do?" 12 78 3 --cancel-button Back --ok-button Select \
+		"Enable" "  Enable Dashboard and Provide URL" \
+		"Disable" "  Disable Dashboard by Commenting Out Entry in AutoStart File" \
+		"Clear" "  Disable Dashboard by Clearing URLs from AutoStart File" \
+		3>&1 1>&2 2>&3)
+	
+	RET=$?
+	if [ $RET -ne 0 ]; then
+		return 0
+	elif [ $RET -eq 0 ]; then
+		case "$DASHMENU" in
+			Enable) do_dash_enable;;
+			Disable) do_dash_disable;;
+			Clear) do_dash_clear;;
+		esac
+	fi
+}
+
+#Networking Function
+do_networking(){
+	NETMENU=$(whiptail --title "Network Configuration for DashboardPi" --menu "What are you configuring?" 10 78 2 --cancel-button Back --ok-button Select \
+		"WiFi" "  Set up a wireless connection" \
+		"Ethernet" "  Configure Ethernet IP Settings" \
+		3>&1 1>&2 2>&3)
+	
+	RET=$?
+	if [ $RET -ne 0 ]; then
+		return 0
+	elif [ $RET -eq 0 ]; then
+		case "$NETMENU" in
+	WiFi) do_wifi ;;
+	Ethernet) do_ethernet ;;
+		esac
+	fi
+}
+
+#Main Menu Function
+do_main_menu(){
+	#Main Menu  
+	MAINMENU=$(whiptail --title "Easy Configuration for DashboardPi" --menu "What are you configuring?" 15 78 6 --cancel-button Finish --ok-button Select \
+			"Networking" "  Configure WiFi and Ethernet Connections" \
+			"Dashboard" "  Configure Displayed Webpage" \
+			"NTP" "  Configure Connection to Time Server" \
+			"Chrome" "  Enable/Disable Chromium Memory Script" \
+			"About" "  About this tool" \
+			"Reboot" "  Reboot system" \
+			3>&1 1>&2 2>&3)
+	
+	#echo $MAINMENU
+	RET=$?
+	if [ $RET -eq 1 ]; then
+		do_finish
+	fi
+	case "$MAINMENU" in
+		Networking) do_networking ;;
+		Dashboard) do_dashboard ;;
+		NTP) do_ntp ;;
+		Chrome) do_chrome ;;
+		About) do_about ;;
+		Reboot) reboot ;;
+	esac
+}
+
+#Run Main Menu Until Finish
+while true; do
+	do_main_menu
+done
+
+
